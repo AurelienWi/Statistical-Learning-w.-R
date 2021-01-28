@@ -1,0 +1,379 @@
+---
+title: "Devoir 1"
+author: Romain Veysseyre & Aurélien Witecki
+date: 18/01/2021
+output: html_document
+---
+
+Nous allons nous déterminer le modèle permettant d'expliquer au mieux la relation entre le salaire d'un joueur de baseball et ses années expériences.
+
+Afin de nous rendre compte de leurs distributions, nous commençons par les représenter sur un graphique.
+
+
+
+```{r Knitr_Global_Options, include=FALSE, cache=FALSE}
+library(knitr)
+opts_chunk$set(warning = FALSE, message = FALSE,
+               autodep = TRUE, tidy = TRUE, cache = TRUE)
+#opts_chunk$set(cache.rebuild=TRUE)
+```
+
+`r if(knitr:::pandoc_to() == "latex") {paste("\\large")}`
+
+
+```{r Libraries, cache=FALSE, echo=FALSE}
+library(caret)
+library(ISLR)
+library(ggplot2)
+library(kableExtra)
+library(jtools)
+```
+
+
+
+```{r, include=FALSE, cache=FALSE, echo=FALSE}
+data(Hitters)
+library(dplyr)
+glimpse(Hitters)
+```
+
+
+```{r, include=FALSE, cache=FALSE, echo=FALSE}
+MyHitters <- data.frame(Hitters$Salary, Hitters$Years)
+names(MyHitters) <- c("Salary","Years")
+MyHitters <- na.omit(MyHitters)
+Salary <- na.omit(MyHitters$Salary)
+Years <- na.omit(MyHitters$Years)
+maxd <- 10
+```
+
+```{r}
+ggplot(mapping = aes(x = MyHitters$Salary)) +
+geom_histogram(colour="black", fill="forestgreen",
+aes(y= ..density..), bins = 20) +
+labs(x = "Salary", y = "Density") +
+geom_density(fill = "olivedrab2", colour = "olivedrab2",
+alpha = 0.5, lwd=0.5, linetype = "dashed") +
+theme(plot.title = element_text(hjust = 0.5),
+plot.background = element_rect(fill = "#BFD5E3"))
+```
+
+Nous voyons que la distribution du salaire est biaisée vers la droite. Nous déciderons donc dans cette étude d'y appliquer une transformation logarithmique afin que sa distribution soit plus uniforme.
+
+```{r}
+ggplot(mapping = aes(x = log(MyHitters$Salary))) +
+geom_histogram(colour="black", fill="forestgreen",
+aes(y= ..density..), bins = 20) +
+labs(x = "Log(Salary)", y = "Density") +
+geom_density(fill = "olivedrab2", colour = "olivedrab2",
+alpha = 0.5, lwd=0.5, linetype = "dashed") +
+theme(plot.title = element_text(hjust = 0.5),
+plot.background = element_rect(fill = "#BFD5E3"))
+```
+
+
+
+# Critère de choix : Leave Group Out Cross Validation (LGOCV)
+
+Cette approche de la validation croisée, aussi appelée de « Monte-Carlo », permet par son caractère aléatoire d’éviter d’éventuels biais induits par un lien entre observations.
+
+## Modèle polynomial
+
+```{r}
+library(caret)
+fitControl <- trainControl(method = "LGOCV", number = 30, p = .5 )
+RMSEP.ocv <- rep(0,maxd)
+maxd <- 10
+for(d in 1:maxd)
+  {
+  set.seed(1)
+  f <- bquote(log(Salary) ~ poly(Years, degree= .(d)))
+  poly.ocv <- train( as.formula(f) ,  data=MyHitters,
+                     method = "lm", trControl = fitControl)
+  RMSEP.ocv[d] <- poly.ocv$results$RMSE
+  }
+plot(1:maxd,RMSEP.ocv,type="b")
+which.min(RMSEP.ocv)
+```
+
+Le RMSEP connaît une croissance exponentielle avec le nombre de degrés du polynôme. La courbe ne nous permet pas d'affirmer quel nombre de degrés minimise le RMSEP, nous allons donc zoomer entre 1 et 5 degrés.
+
+```{r}
+maxd2 <- 5
+library(caret)
+fitControl <- trainControl(method = "LGOCV", number = 30, p = .5 )
+RMSEP.ocv <- rep(0,maxd2)
+for(d in 1:maxd2)
+  {
+  set.seed(1)
+  f <- bquote(log(Salary) ~ poly(Years, degree= .(d)))
+  poly.ocv <- train( as.formula(f) ,  data=MyHitters,
+                     method = "lm", trControl = fitControl)
+  RMSEP.ocv[d] <- poly.ocv$results$RMSE
+  }
+plot(1:maxd2,RMSEP.ocv,type="b")
+```
+
+Nous trouvons que le nombre de degrés minimisant le RMSE est 3.
+Nous pouvons regarder la courbe de la relation estimée.
+
+
+```{r}
+d.opt <- which.min(RMSEP.ocv)
+lm.opt <- lm(log(Salary)~poly(Years,d.opt), data=MyHitters)
+effect_plot(lm.opt, data = MyHitters,pred = Years,interval = TRUE, robust = "HC1",colors = "blue", line.thickness = 0.7,plot.points = TRUE)
+```
+
+Suivant la relation estimée, il semble que les années d'expérience augmentent le salaire d'un joueur jusqu'à un certain niveau. En effet, nous voyons un point d'inflexion entre 12 et 13 années d'expérience. Cela semble logique étant donné que les capacités physiques diminuent avec l'âge, il arrive un moment ou le gain permis par l'expérience ne compense plus la diminution des capacités physiques.
+
+## KNN régression
+
+```{r}
+library(pracma)
+tic()
+fitControl <- trainControl(method = "LGOCV", number = 30, p = .5 )
+set.seed(1)
+knn.fit.cv <- train(log(Salary) ~ Years, data = MyHitters, method = "knn", trControl = fitControl, tuneGrid = expand.grid(k = seq(2, 50, by=10) ))
+toc()
+plot(knn.fit.cv)
+print(knn.fit.cv)
+```
+
+Le RMSE est minimisé en prenant entre 20 et 30 voisins. Nous zoomons pour affirmer notre choix.
+
+```{r}
+library(pracma)
+tic()
+fitControl <- trainControl(method = "LGOCV", number = 30, p = .5 )
+set.seed(1)
+
+knn.fit.cv <- train(log(Salary) ~ Years, data = MyHitters, method = "knn", trControl = fitControl, tuneGrid = expand.grid(k = seq(20, 30, by=1) ))
+toc()
+plot(knn.fit.cv)
+```
+
+En prenant 26 voisins, le RMSE est minimisé.
+
+Nous allons maintenant regarder les courbes des relations estimées via nos deux méthodes.
+
+```{r}
+plot(Years, log(Salary), pch = ".", main="Comparaison des courbes", xlab = "Expérience", ylab = "Log(Salaire)")
+d.opt <- which.min(RMSEP.ocv)
+lm.opt.1 <- lm(log(Salary)~poly(Years,d.opt), data=MyHitters)
+newx <- seq(from = min(Years),to = max(Years),
+            length.out = 200)
+lines(newx, predict(lm.opt.1,
+                    newdata = data.frame(Years = newx)),
+      col = "red")
+lines(newx, predict(knn.fit.cv,
+                    newdata = data.frame(Years = newx)),
+      col="blue")
+legend("topright", legend = c("LGOCV-Poly","LGOCV-KNN"),
+       lwd=2, bty="n", col= c("red","blue"))
+```
+
+La courbe estimé par modèle polynomiale semble mieux prendre en compte la dynamique des données. En effet, les deux méthodes montrent une relation croissante jusqu'à 12/13 ans d'expériences. Mais alors que l'estimation via la méthode des plus proche des voisins semble atteindre un plateau, l'estimation par modèle polynomiale montre une chute dans le salaire si l'expérience augmente trop pour au final remonter après 22 ans d'expérience. Ce regain peut être interprété comme le fait qu'un joueur ayant une aussi grande longévité bénéficie d'un engouement du public et mérite donc un salaire plus élevé malgré des capacités moindres.
+
+# Critère de choix : Leave-one-out cross-validation (LOOCV)
+
+Aussi appelé la validation croisée d'un contre tous, il s'agit d'un cas particulier de la validation croisée à k blocs où k=n. C'est-à-dire qu'à chaque itération d'apprentissage-validation, l'apprentissage se fait sur n-1 observations et la validation sur l'unique observation restante.
+
+```{r}
+# Automated LOOCV
+library(boot)
+tic()
+# A fit for each degree
+aloocv <- rep(0,maxd)
+for(d in 1:maxd){
+  glm.fit <- glm(log(Salary)~poly(Years,d), data=MyHitters)
+  aloocv[d] <- cv.glm(data=MyHitters,glm.fit)$delta[1]
+}
+toc()
+plot(1:maxd,aloocv,type="b")
+```
+
+Le LOOCV croit puis décroît avec le nombre de degrés du polynôme. La courbe ne nous permet pas d'affirmer quel nombre de degrés minimise le RMSEP, nous allons donc zoomer entre 1 et 6 degrés.
+
+```{r}
+# Automated LOOCV
+library(boot)
+tic()
+# A fit for each degree
+aloocv <- rep(0,5)
+for(d in 1:5){
+  glm.fit <- glm(log(Salary)~poly(Years,d), data=MyHitters)
+  aloocv[d] <- cv.glm(data=MyHitters,glm.fit)$delta[1]
+}
+toc()
+plot(1:5,aloocv,type="b")
+print(aloocv)
+```
+
+Le LOOCV est minimisé avec un polynôme de degré 4. Nous voyons que cette méthode ne donne donc pas le même nombre optimal de degré du polynôme. En effet, avec la méthode du Leave Group Out Cross Validation, le degré optimal était 3.
+
+
+## KNN régression
+
+```{r}
+library(foreach)
+# LOOCV for KNN
+loocv.knn <- function(k){
+  knn.fit <- knnreg(log(Salary) ~ Years, data = MyHitters, k=k+1)
+  u <- log(Salary) - predict(knn.fit,MyHitters)
+  mean(u^2)*((k+1)/k)^2
+}
+kgrid <- seq(50,70,by=1)
+cv.knn <- foreach(i=1:length(kgrid), .combine=cbind) %do% {
+  loocv.knn(kgrid[i])
+}
+plot(kgrid,cv.knn,type="b")
+write.table(cv.knn)
+
+kopt <- kgrid[order(cv.knn)][1]
+knn.opt.loo <- knnreg(log(Salary) ~ Years, data = MyHitters, k=kopt)
+```
+
+Avec cette méthode, le nombre de voisins optimal est 62. Nous voyons que cette méthode ne donne donc pas le même nombre de voisins optimal. En effet, avec la méthode du Leave Group Out Cross Validation, le nombre de voisins optimal était 26.
+
+
+On compare maintenant les courbes des relations estimées avec le modèle polynomial et la KNN régression.
+
+```{r}
+plot(Years, log(Salary), pch = ".",
+main="Comparaison des courbes", xlab = "Expérience",
+ylab = "log(Salaire)")
+d.opt <- which.min(aloocv)
+lm.opt.loo <- lm(log(Salary)~poly(Years,d.opt), data=MyHitters)
+newx <- seq(from = min(Years),to = max(Years),
+length.out = 200)
+
+lines(newx, predict(lm.opt.loo,
+newdata = data.frame(Years = newx)),
+col = "red")
+lines(newx, predict(knn.opt.loo,
+newdata = data.frame(Years = newx)),
+col="blue")
+legend("topright", legend = c("LOOCV-Poly","LOOCV-KNN"),
+lwd=2, bty="n", col= c("red","blue"))
+```
+
+Nous voyons que la courbe de la relation estimé par un modèle polynomial semble plus adéquate. En effet, la relation semble prendre en compte le fait que les capacités physiques diminuent avec le temps contrairement à la relation trouvé par la méthode des KNN. Explication identique qu'avec le critère de la Leave Group Out Cross Validation.
+
+# Critère de choix : K-fold cross validation
+
+## Modèle polynomial
+
+ La validation croisée K-fold présente l’avantage de faire un usage « équilibré » des données : chaque observation est utilisée exactement V − 1 fois pour l’entraînement et une fois pour l’apprentissage.
+
+```{r}
+
+fitControl <- trainControl(## 5-fold CV
+                            method = "cv", number = 5)
+
+RMSEP.cv <- rep(0,10)
+set.seed(1)
+
+# A fit for each degree
+for(d in 1:10)
+{
+f <- bquote(log(Salary) ~ poly(Years, degree = .(d)))
+poly.cv <- train( as.formula(f) , data=MyHitters,
+method = "lm", trControl = fitControl)
+RMSEP.cv[d] <- poly.cv$results$RMSE
+}
+plot(1:10,RMSEP.cv,type="b")
+```
+
+Le RMSE semble stable entre 1 et 7 degrés puis croit pour des degrés supérieurs. La courbe ne nous permet pas d'affirmer quel nombre de degrés minimise le RMSEP, nous allons donc zoomer entre 1 et 7 degrés.
+
+
+```{r}
+
+fitControl <- trainControl(## 5-fold CV
+                            method = "cv", number = 5)
+
+RMSEP.cv <- rep(0,7)
+set.seed(1)
+
+# A fit for each degree
+for(d in 1:7)
+{
+f <- bquote(log(Salary) ~ poly(Years, degree = .(d)))
+poly.cv <- train( as.formula(f) , data=MyHitters,
+method = "lm", trControl = fitControl)
+RMSEP.cv[d] <- poly.cv$results$RMSE
+}
+plot(1:7,RMSEP.cv,type="b")
+```
+
+Nous arrivons à la même conclusion qu'avec la LOOCV. Le RMSE est minimisé avec un polynôme de degrés 4.
+
+## KNN régression
+
+```{r}
+
+# Train control
+RcvControl <- trainControl(method = "repeatedcv",
+                        number = 5, repeats = 10)
+maxd <- 10
+RMSEP.cvKNN <- rep(0,maxd)
+set.seed(1)
+
+knn.fit.rep <- train(log(Salary) ~ Years, data = MyHitters,
+                 method = "knn",
+                 trControl = RcvControl,
+                 tuneGrid = expand.grid(k = seq(35, 45, by=1) ))
+plot(knn.fit.rep)
+
+```
+
+Avec cette méthode, le nombre optimal de voisins est 36. Ce nombre est différent qu'avec les deux méthodes précédentes.
+
+Lorsque nous regardons les courbes :
+
+```{r}
+plot(Years,log(Salary), pch = ".",
+main="Comparaison des courbes", xlab = "Expérience",
+ylab = "Log(Salaire)")
+
+newx <- seq(from=min(Years),to=max(Years),length.out = 200)
+d.opt <- which.min(RMSEP.cv)
+lines(newx, predict(lm(log(Salary)~poly(Years, d.opt), data=MyHitters),
+                    newdata = data.frame(Years=newx)),
+      col="red")
+knn.opt <- knnreg(log(Salary)~Years, data = MyHitters,
+                  k = knn.fit.rep$bestTune)
+lines(newx, predict(knn.opt,
+                    newdata = data.frame(Years=newx)),
+      col="blue")
+legend("topright", legend = c("RCV-Poly","RCV-KNN"),
+       lwd=2, bty="n", col= c("red","blue"))
+```
+
+Nous voyons que la courbe de la relation estimé par un modèle polynomial semble plus adéquate. En effet, la relation semble prendre en compte le fait que les capacités physiques diminuent avec le temps contrairement à la relation trouvé par la méthode des KNN. Explication identique qu'avec les deux autres critères.
+
+# Conclusion :
+
+Les 3 méthodes de validation croisée donnent des courbes de relations estimées similaire. De part une analyse graphique, nous trouvons que la relation estimée par modèle polynomial est plus fine que la méthode des plus proches voisin. En effet, cette dernière ne semble pas prendre en compte la diminution des capacités physiques sur le salaire ainsi le regain de salaire que peut avoir un ancien joueur en toute fin de carrière (après 22 ans d'expérience).
+
+Il nous reste maintenant à déterminer l'ordre de ce polynôme. En effet, la Leave Group Out Cross Validation induit un polynôme de degré 3 alors que les deux autres méthodes indiquent un polynôme de degré 4. Afin de déterminer entre le degré 3 et 4, nous allons comparer les RMSE.
+
+```{r}
+# Leave Group Out Cross Validation : 3 degrés
+which.min(RMSEP.ocv)
+RMSE_3 <- RMSEP.ocv[3]
+RMSE_3
+
+# Leave-one-out cross-validation : 4 degrés
+which.min(aloocv)
+RMSE_4 <- aloocv[4]
+RMSE_4
+
+# K-fold cross validation : 4 degrés
+which.min(RMSEP.cv)
+RMSE_4bis <-RMSEP.cv[4]
+RMSE_4bis
+
+```
+
+Avec une relation estimée par un polynôme de degré 3, le RMSE est de 0,647. Avec une relation estimée par un polynôme de degré 4 le RMSE minimal est soit de 0,41 soit de 0,63. Étant donné qu'il est, dans tous les cas, inférieur, nous décidons de modéliser la relation salaire/expérience d'un joueur par un polynôme de degré 4.
